@@ -1,0 +1,101 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider  = "postgresql"
+}
+
+model User {
+  id              String    @id @default(cuid())
+  name            String
+  email           String    @unique
+  avatarUrl       String?
+  role            Role      @default(AGENT)
+  specializations String[]
+  tickets         Ticket[]  @relation("AssignedTickets")
+  messages        Message[]
+  comments        Comment[]
+  createdAt       DateTime  @default(now())
+}
+
+enum Role {
+  ADMIN
+  AGENT
+}
+
+model Ticket {
+  id                    String       @id @default(cuid())
+  externalId            String?      @unique
+  subject               String
+  translatedSubject     String?
+  detectedLanguage      String?
+  status                TicketStatus @default(OPEN)
+  priority              Priority     @default(MEDIUM)
+  category              String?
+  tags                  String[]
+  customerEmail         String?
+  customerName          String?
+  assigneeId            String?
+  assignee              User?        @relation("AssignedTickets", fields: [assigneeId], references: [id])
+  outlookConversationId String?
+  sentryData            Json?
+  posthogData           Json?
+  userData              Json?
+  aiDraftResponse       String?      @db.Text
+  aiDraftEnglish        String?      @db.Text
+  aiConfidence          Float?
+  messages              Message[]
+  comments              Comment[]
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING
+  RESOLVED
+  CLOSED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Message {
+  id                  String     @id @default(cuid())
+  ticketId            String
+  ticket              Ticket     @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  originalText        String     @db.Text
+  englishText         String?    @db.Text
+  outboundTranslation String?    @db.Text
+  originalLanguage    String?
+  senderType          SenderType
+  senderEmail         String?
+  senderName          String?
+  userId              String?
+  user                User?      @relation(fields: [userId], references: [id])
+  outlookMessageId    String?
+  createdAt           DateTime   @default(now())
+}
+
+enum SenderType {
+  CUSTOMER
+  AGENT
+  SYSTEM
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  body      String   @db.Text
+  createdAt DateTime @default(now())
+}
