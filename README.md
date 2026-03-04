@@ -52,13 +52,19 @@ It prints an authorization URL. Open it, approve the Gmail permissions, paste th
 npx prisma db push
 ```
 
-### 4. Seed with ticket data
+### 4. Generate Prisma client
+
+```bash
+npx prisma generate
+```
+
+### 5. Seed with ticket data
 
 ```bash
 npm run seed
 ```
 
-This parses the first 10 ticket files in `tickets/` (default), creates 3 demo users, and populates the database. Takes ~10 seconds without AI, or ~30 seconds with AI categorization/translation if `GROQ_API_KEY` is set.
+This parses the first 5 ticket files in `tickets/` (default), creates 3 demo users, and populates the database. Takes ~10 seconds without AI, or ~30 seconds with AI categorization/translation if `GROQ_API_KEY` is set.
 
 To seed only a few tickets for quick testing:
 
@@ -66,7 +72,7 @@ To seed only a few tickets for quick testing:
 npm run seed -- --limit=10
 ```
 
-### 5. Run the dev server
+### 6. Run the dev server
 
 ```bash
 npm run dev
@@ -126,7 +132,7 @@ tickets/                 100 raw support ticket .txt files
 | `npm run dev` | Start development server |
 | `npm run build` | Production build |
 | `npm run seed` | Seed database from ticket files |
-| `npm run seed -- --limit=N` | Seed first N tickets (default: 20) |
+| `npm run seed -- --limit=N` | Seed first N tickets (default: 5) |
 | `npm run db:reset` | Wipe all data (then re-seed) |
 | `npm run gmail:token` | One-time Gmail OAuth2 refresh token setup |
 | `npx prisma db push` | Push schema to database |

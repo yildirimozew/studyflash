@@ -190,7 +190,7 @@ function sleep(ms: number): Promise<void> {
 
 async function main() {
   const limitArg = process.argv.find((a) => a.startsWith("--limit="));
-  const limit = limitArg ? parseInt(limitArg.split("=")[1], 10) : 10;
+  const limit = limitArg ? parseInt(limitArg.split("=")[1], 10) : 5;
 
   console.log("=== StudyFlash Support Platform - Seed Script ===\n");
   console.log(`Groq AI: ${hasAI ? "ENABLED (will translate + categorize via AI)" : "DISABLED (using local fallbacks)"}\n`);
