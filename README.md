@@ -2,6 +2,8 @@
 
 Internal support platform MVP for triaging, translating, and responding to multilingual customer tickets with AI assistance.
 
+![Architecture](studyflash.png)
+
 ## Quick Start
 
 ### Prerequisites
