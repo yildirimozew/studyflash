@@ -139,7 +139,7 @@ export async function syncGmailMessages(): Promise<SyncResult> {
 
         const bodyText = decodeBody(msg.payload);
 
-        const isNew = await processInboundMessage({
+        const outcome = await processInboundMessage({
           gmailMessageId: id,
           messageId,
           threadId,
@@ -149,7 +149,10 @@ export async function syncGmailMessages(): Promise<SyncResult> {
           bodyText,
         });
 
-        if (isNew) result.newMessages++;
+        if (outcome) {
+          result.newMessages++;
+          if (outcome === "new-ticket") result.newTickets++;
+        }
       } catch (err) {
         result.errors.push(
           `Failed to process message ${id}: ${err instanceof Error ? err.message : String(err)}`
@@ -173,7 +176,7 @@ async function processInboundMessage(msg: {
   senderEmail: string;
   senderName: string;
   bodyText: string;
-}): Promise<boolean> {
+}): Promise<"new-ticket" | "new-message" | false> {
   // Skip if already imported
   const existing = await prisma.message.findFirst({
     where: { gmailMessageId: msg.gmailMessageId },
@@ -185,6 +188,7 @@ async function processInboundMessage(msg: {
   let ticket = await prisma.ticket.findFirst({
     where: { gmailThreadId: msg.threadId },
   });
+  const isNewTicket = !ticket;
 
   if (!ticket) {
     // New thread -- only create a ticket for customer messages
@@ -223,7 +227,7 @@ async function processInboundMessage(msg: {
         customerEmail: msg.senderEmail,
         customerName: msg.senderName,
         gmailThreadId: msg.threadId,
-        assigneeId: categorization.confidence > 0.8 ? (assignee?.id ?? null) : null,
+        assigneeId: assignee?.id ?? null,
         aiConfidence: categorization.confidence,
       },
     });
@@ -247,7 +251,7 @@ async function processInboundMessage(msg: {
     },
   });
 
-  return true;
+  return isNewTicket ? "new-ticket" : "new-message";
 }
 
 // ─── Send Reply ──────────────────────────────────────────────────────────────
