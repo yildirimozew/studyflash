@@ -4,15 +4,17 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, LogOut } from "lucide-react";
 import { signOut } from "next-auth/react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
 export function Topbar() {
   const [syncing, setSyncing] = useState(false);
+  const router = useRouter();
 
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const res = await fetch("/api/sync/outlook", { method: "POST" });
+      const res = await fetch("/api/sync/gmail", { method: "POST" });
       const data = await res.json();
       if (data.errors?.length && !data.newMessages) {
         toast.info(data.errors[0]);
@@ -21,6 +23,7 @@ export function Topbar() {
           `Synced ${data.newMessages} new message(s), ${data.newTickets} new ticket(s)`
         );
       }
+      router.refresh();
     } catch {
       toast.error("Sync failed");
     } finally {
@@ -39,7 +42,7 @@ export function Topbar() {
           disabled={syncing}
         >
           <RefreshCw className={cn("h-4 w-4 mr-1.5", syncing && "animate-spin")} />
-          {syncing ? "Syncing..." : "Sync Outlook"}
+          {syncing ? "Syncing..." : "Sync Gmail"}
         </Button>
         <Button
           variant="ghost"

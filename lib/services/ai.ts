@@ -1,6 +1,6 @@
 import Groq from "groq-sdk";
 
-const MODEL = "llama-3.3-70b-versatile";
+const MODEL = "llama-3.1-8b-instant";
 
 function getClient(): Groq | null {
   const apiKey = process.env.GROQ_API_KEY;

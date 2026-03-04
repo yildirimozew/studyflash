@@ -2,10 +2,12 @@ import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
 import { prisma } from "@/lib/prisma";
+import { authConfig } from "@/auth.config";
 
 const isDemoMode = process.env.DEMO_MODE === "true";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  ...authConfig,
   providers: [
     ...(process.env.GOOGLE_CLIENT_ID
       ? [

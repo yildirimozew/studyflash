@@ -47,12 +47,14 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="border-t p-3">
-        <div className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-2">
-          <BarChart3 className="h-4 w-4 text-muted-foreground" />
-          <span className="text-xs text-muted-foreground">Demo Mode</span>
+      {process.env.NEXT_PUBLIC_DEMO_MODE === "true" && (
+        <div className="border-t p-3">
+          <div className="flex items-center gap-2 rounded-md bg-muted/50 px-3 py-2">
+            <BarChart3 className="h-4 w-4 text-muted-foreground" />
+            <span className="text-xs text-muted-foreground">Demo Mode</span>
+          </div>
         </div>
-      </div>
+      )}
     </aside>
   );
 }

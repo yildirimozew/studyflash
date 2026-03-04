@@ -1,62 +1,32 @@
-import { Client } from "@microsoft/microsoft-graph-client";
+import { google } from "googleapis";
 import { prisma } from "@/lib/prisma";
 import { translateInbound, categorizeTicket, smartAssign } from "./ai";
 
 // ─── Configuration ───────────────────────────────────────────────────────────
 
-function isGraphConfigured(): boolean {
+const GMAIL_ADDRESS = process.env.GMAIL_ADDRESS ?? "";
+
+function isGmailConfigured(): boolean {
   return !!(
-    process.env.MICROSOFT_GRAPH_CLIENT_ID &&
-    process.env.MICROSOFT_GRAPH_CLIENT_SECRET &&
-    process.env.MICROSOFT_GRAPH_TENANT_ID
+    process.env.GOOGLE_CLIENT_ID &&
+    process.env.GOOGLE_CLIENT_SECRET &&
+    process.env.GMAIL_REFRESH_TOKEN &&
+    GMAIL_ADDRESS
   );
 }
 
-const COMPANY_MAILBOX = process.env.MICROSOFT_GRAPH_MAILBOX ?? "";
+// ─── Gmail Client ────────────────────────────────────────────────────────────
 
-// ─── Graph Client ────────────────────────────────────────────────────────────
-
-async function getAccessToken(): Promise<string> {
-  const tokenUrl = `https://login.microsoftonline.com/${process.env.MICROSOFT_GRAPH_TENANT_ID}/oauth2/v2.0/token`;
-
-  const body = new URLSearchParams({
-    client_id: process.env.MICROSOFT_GRAPH_CLIENT_ID!,
-    client_secret: process.env.MICROSOFT_GRAPH_CLIENT_SECRET!,
-    scope: "https://graph.microsoft.com/.default",
-    grant_type: "client_credentials",
-  });
-
-  const res = await fetch(tokenUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-  });
-
-  if (!res.ok) {
-    throw new Error(`Failed to get Graph access token: ${res.statusText}`);
-  }
-
-  const data = await res.json();
-  return data.access_token;
-}
-
-function createGraphClient(accessToken: string): Client {
-  return Client.init({
-    authProvider: (done) => done(null, accessToken),
-  });
+function getGmailClient() {
+  const auth = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET
+  );
+  auth.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
+  return google.gmail({ version: "v1", auth });
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
-
-interface GraphMessage {
-  id: string;
-  conversationId: string;
-  subject: string;
-  bodyPreview: string;
-  body: { contentType: string; content: string };
-  sender: { emailAddress: { name: string; address: string } };
-  receivedDateTime: string;
-}
 
 export interface SyncResult {
   newTickets: number;
@@ -66,78 +36,162 @@ export interface SyncResult {
 
 // ─── Sender Detection ────────────────────────────────────────────────────────
 
-function detectSenderType(
-  senderEmail: string
-): "CUSTOMER" | "AGENT" {
-  if (!COMPANY_MAILBOX) return "CUSTOMER";
-  return senderEmail.toLowerCase() === COMPANY_MAILBOX.toLowerCase()
+function detectSenderType(senderEmail: string): "CUSTOMER" | "AGENT" {
+  if (!GMAIL_ADDRESS) return "CUSTOMER";
+  return senderEmail.toLowerCase() === GMAIL_ADDRESS.toLowerCase()
     ? "AGENT"
     : "CUSTOMER";
 }
 
-// ─── Sync Outlook ────────────────────────────────────────────────────────────
+// ─── Header Helpers ──────────────────────────────────────────────────────────
 
-export async function syncOutlookMessages(
-  lastSyncTime?: string
-): Promise<SyncResult> {
-  if (!isGraphConfigured()) {
-    return { newTickets: 0, newMessages: 0, errors: ["Graph API not configured - running in demo mode"] };
+function getHeader(
+  headers: { name?: string | null; value?: string | null }[],
+  name: string
+): string {
+  return (
+    headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())?.value ??
+    ""
+  );
+}
+
+function decodeBody(
+  payload: {
+    mimeType?: string | null;
+    body?: { data?: string | null } | null;
+    parts?: typeof payload[] | null;
+  } | null | undefined
+): string {
+  if (!payload) return "";
+
+  if (
+    payload.mimeType === "text/plain" &&
+    payload.body?.data
+  ) {
+    return Buffer.from(payload.body.data, "base64").toString("utf-8");
   }
 
-  const accessToken = await getAccessToken();
-  const client = createGraphClient(accessToken);
-
-  let url = `/users/${COMPANY_MAILBOX}/mailFolders/inbox/messages?$top=50&$orderby=receivedDateTime desc&$select=id,conversationId,subject,bodyPreview,body,sender,receivedDateTime`;
-
-  if (lastSyncTime) {
-    url += `&$filter=receivedDateTime ge ${lastSyncTime}`;
+  if (payload.parts) {
+    // Prefer text/plain; fall back to text/html
+    const plain = payload.parts.find((p) => p?.mimeType === "text/plain");
+    if (plain) return decodeBody(plain);
+    const html = payload.parts.find((p) => p?.mimeType === "text/html");
+    if (html) return stripHtml(decodeBody(html));
+    // Recurse into multipart containers
+    for (const part of payload.parts) {
+      const text = decodeBody(part ?? null);
+      if (text) return text;
+    }
   }
 
+  if (payload.body?.data) {
+    const raw = Buffer.from(payload.body.data, "base64").toString("utf-8");
+    return payload.mimeType === "text/html" ? stripHtml(raw) : raw;
+  }
+
+  return "";
+}
+
+// ─── Sync Gmail ──────────────────────────────────────────────────────────────
+
+export async function syncGmailMessages(): Promise<SyncResult> {
+  if (!isGmailConfigured()) {
+    return {
+      newTickets: 0,
+      newMessages: 0,
+      errors: ["Gmail not configured - add GMAIL_REFRESH_TOKEN and GMAIL_ADDRESS to .env"],
+    };
+  }
+
+  const gmail = getGmailClient();
   const result: SyncResult = { newTickets: 0, newMessages: 0, errors: [] };
 
   try {
-    const response = await client.api(url).get();
-    const messages: GraphMessage[] = response.value || [];
+    const listRes = await gmail.users.messages.list({
+      userId: "me",
+      q: "in:inbox",
+      maxResults: 1,
+    });
 
-    for (const msg of messages) {
+    const messageIds = listRes.data.messages ?? [];
+
+    for (const { id } of messageIds) {
+      if (!id) continue;
       try {
-        await processInboundMessage(msg);
-        result.newMessages++;
+        const msgRes = await gmail.users.messages.get({
+          userId: "me",
+          id,
+          format: "full",
+        });
+
+        const msg = msgRes.data;
+        const headers = msg.payload?.headers ?? [];
+        const subject = getHeader(headers, "subject") || "(no subject)";
+        const from = getHeader(headers, "from");
+        const messageId = getHeader(headers, "message-id");
+        const threadId = msg.threadId ?? id;
+
+        // Parse "Name <email>" or plain email
+        const fromMatch = from.match(/^(.+?)\s*<(.+?)>$/) ??
+          from.match(/^()(.+)$/);
+        const senderName = fromMatch?.[1]?.trim() || from;
+        const senderEmail = (fromMatch?.[2] ?? from).trim().toLowerCase();
+
+        const bodyText = decodeBody(msg.payload);
+
+        const isNew = await processInboundMessage({
+          gmailMessageId: id,
+          messageId,
+          threadId,
+          subject,
+          senderEmail,
+          senderName,
+          bodyText,
+        });
+
+        if (isNew) result.newMessages++;
       } catch (err) {
         result.errors.push(
-          `Failed to process message ${msg.id}: ${err instanceof Error ? err.message : "unknown error"}`
+          `Failed to process message ${id}: ${err instanceof Error ? err.message : String(err)}`
         );
       }
     }
   } catch (err) {
     result.errors.push(
-      `Graph API sync failed: ${err instanceof Error ? err.message : "unknown error"}`
+      `Gmail sync failed: ${err instanceof Error ? err.message : String(err)}`
     );
   }
 
   return result;
 }
 
-async function processInboundMessage(msg: GraphMessage): Promise<void> {
-  const existingMessage = await prisma.message.findFirst({
-    where: { outlookMessageId: msg.id },
+async function processInboundMessage(msg: {
+  gmailMessageId: string;
+  messageId: string;
+  threadId: string;
+  subject: string;
+  senderEmail: string;
+  senderName: string;
+  bodyText: string;
+}): Promise<boolean> {
+  // Skip if already imported
+  const existing = await prisma.message.findFirst({
+    where: { gmailMessageId: msg.gmailMessageId },
   });
-  if (existingMessage) return;
+  if (existing) return false;
 
-  const senderEmail = msg.sender.emailAddress.address;
-  const senderName = msg.sender.emailAddress.name;
-  const senderType = detectSenderType(senderEmail);
-  const bodyText = stripHtml(msg.body.content);
+  const senderType = detectSenderType(msg.senderEmail);
 
   let ticket = await prisma.ticket.findFirst({
-    where: { outlookConversationId: msg.conversationId },
+    where: { gmailThreadId: msg.threadId },
   });
 
   if (!ticket) {
-    if (senderType === "AGENT") return;
+    // New thread -- only create a ticket for customer messages
+    if (senderType === "AGENT") return false;
 
-    const translation = await translateInbound(bodyText);
-    const categorization = await categorizeTicket(bodyText);
+    const translation = await translateInbound(msg.bodyText);
+    const categorization = await categorizeTicket(msg.bodyText);
 
     const agents = await prisma.user.findMany({
       where: { role: "AGENT" },
@@ -147,7 +201,7 @@ async function processInboundMessage(msg: GraphMessage): Promise<void> {
     const assignment = await smartAssign({
       category: categorization.category,
       priority: categorization.priority,
-      ticketBody: bodyText,
+      ticketBody: msg.bodyText,
       team: agents.map((a) => ({
         email: a.email,
         name: a.name ?? a.email,
@@ -159,18 +213,17 @@ async function processInboundMessage(msg: GraphMessage): Promise<void> {
 
     ticket = await prisma.ticket.create({
       data: {
-        subject: msg.subject || deriveSubjectFromBody(bodyText),
-        translatedSubject: msg.subject || translation.englishText.substring(0, 100),
+        subject: msg.subject,
+        translatedSubject: translation.englishText.substring(0, 200),
         detectedLanguage: translation.detectedLanguage,
         status: "OPEN",
         priority: categorization.priority,
         category: categorization.category,
         tags: categorization.tags,
-        customerEmail: senderEmail,
-        customerName: senderName,
-        outlookConversationId: msg.conversationId,
-        assigneeId:
-          categorization.confidence > 0.8 ? (assignee?.id ?? null) : null,
+        customerEmail: msg.senderEmail,
+        customerName: msg.senderName,
+        gmailThreadId: msg.threadId,
+        assigneeId: categorization.confidence > 0.8 ? (assignee?.id ?? null) : null,
         aiConfidence: categorization.confidence,
       },
     });
@@ -178,54 +231,73 @@ async function processInboundMessage(msg: GraphMessage): Promise<void> {
 
   const translation =
     senderType === "CUSTOMER"
-      ? await translateInbound(bodyText)
-      : { englishText: bodyText, detectedLanguage: "en" };
+      ? await translateInbound(msg.bodyText)
+      : { englishText: msg.bodyText, detectedLanguage: "en" };
 
   await prisma.message.create({
     data: {
       ticketId: ticket.id,
-      originalText: bodyText,
+      originalText: msg.bodyText,
       englishText: translation.englishText,
       originalLanguage: translation.detectedLanguage,
       senderType,
-      senderEmail,
-      senderName,
-      outlookMessageId: msg.id,
+      senderEmail: msg.senderEmail,
+      senderName: msg.senderName,
+      gmailMessageId: msg.gmailMessageId,
     },
   });
+
+  return true;
 }
 
 // ─── Send Reply ──────────────────────────────────────────────────────────────
 
-export async function sendReplyViaOutlook(params: {
-  outlookMessageId: string;
+export async function sendReplyViaGmail(params: {
+  gmailMessageId: string;
+  gmailThreadId: string | null;
+  toEmail: string;
+  subject: string;
   replyBody: string;
 }): Promise<{ success: boolean; error?: string }> {
-  if (!isGraphConfigured()) {
-    console.log("[Demo Mode] Would send reply via Outlook:", params.replyBody.substring(0, 100));
+  if (!isGmailConfigured()) {
+    console.log("[Demo Mode] Would send Gmail reply:", params.replyBody.substring(0, 100));
     return { success: true };
   }
 
   try {
-    const accessToken = await getAccessToken();
-    const client = createGraphClient(accessToken);
+    const gmail = getGmailClient();
 
-    await client
-      .api(`/users/${COMPANY_MAILBOX}/messages/${params.outlookMessageId}/reply`)
-      .post({
-        message: {
-          body: {
-            contentType: "Text",
-            content: params.replyBody,
-          },
-        },
-      });
+    // Build RFC 2822 email with thread-linking headers
+    const emailLines = [
+      `From: ${GMAIL_ADDRESS}`,
+      `To: ${params.toEmail}`,
+      `Subject: Re: ${params.subject.replace(/^Re:\s*/i, "")}`,
+      `In-Reply-To: ${params.gmailMessageId}`,
+      `References: ${params.gmailMessageId}`,
+      `Content-Type: text/plain; charset=utf-8`,
+      ``,
+      params.replyBody,
+    ];
+
+    const raw = Buffer.from(emailLines.join("\r\n"))
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+
+    await gmail.users.messages.send({
+      userId: "me",
+      requestBody: {
+        raw,
+        ...(params.gmailThreadId ? { threadId: params.gmailThreadId } : {}),
+      },
+    });
 
     return { success: true };
   } catch (err) {
     return {
       success: false,
-      error: err instanceof Error ? err.message : "Unknown Graph API error",
+      error: err instanceof Error ? err.message : "Unknown Gmail API error",
     };
   }
 }
@@ -244,10 +316,4 @@ function stripHtml(html: string): string {
     .replace(/&quot;/g, '"')
     .replace(/\s+/g, " ")
     .trim();
-}
-
-function deriveSubjectFromBody(body: string): string {
-  const firstLine = body.split("\n")[0].trim();
-  if (firstLine.length <= 80) return firstLine;
-  return firstLine.substring(0, 77) + "...";
 }

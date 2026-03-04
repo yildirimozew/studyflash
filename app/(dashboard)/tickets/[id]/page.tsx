@@ -1,10 +1,12 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { auth } from "@/lib/auth";
 import { TicketConversation } from "@/components/tickets/ticket-conversation";
 import { TicketSidebar } from "@/components/tickets/ticket-sidebar";
 import { TicketAiDraft } from "@/components/tickets/ticket-ai-draft";
 import { TicketEnrichment } from "@/components/tickets/ticket-enrichment";
 import { TicketComments } from "@/components/tickets/ticket-comments";
+import { TicketSubjectHeader } from "@/components/tickets/ticket-subject-header";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft } from "lucide-react";
@@ -17,7 +19,9 @@ interface PageProps {
 export default async function TicketDetailPage({ params }: PageProps) {
   const { id } = await params;
 
-  const [ticket, users, demoUser] = await Promise.all([
+  const session = await auth();
+
+  const [ticket, users] = await Promise.all([
     prisma.ticket.findUnique({
       where: { id },
       include: {
@@ -42,11 +46,16 @@ export default async function TicketDetailPage({ params }: PageProps) {
       select: { id: true, name: true, email: true, avatarUrl: true },
       orderBy: { name: "asc" },
     }),
-    prisma.user.findFirst({
-      where: { role: "ADMIN" },
-      select: { id: true },
-    }),
   ]);
+
+  // Resolve the current user's DB id from the session email
+  const currentUser = session?.user?.email
+    ? await prisma.user.findUnique({
+        where: { email: session.user.email },
+        select: { id: true },
+      })
+    : null;
+  const currentUserId = currentUser?.id ?? users[0]?.id ?? "";
 
   if (!ticket) notFound();
 
@@ -87,16 +96,13 @@ export default async function TicketDetailPage({ params }: PageProps) {
             Back
           </Button>
         </Link>
-        <div className="flex-1 min-w-0">
-          <h1 className="text-lg font-semibold truncate">
-            {ticket.translatedSubject || ticket.subject}
-          </h1>
-          <p className="text-xs text-muted-foreground">
-            #{ticket.externalId || ticket.id.slice(0, 8)} &middot;{" "}
-            {ticket.detectedLanguage?.toUpperCase()} &middot;{" "}
-            {ticket.status.replace("_", " ")}
-          </p>
-        </div>
+        <TicketSubjectHeader
+          subject={ticket.subject}
+          translatedSubject={ticket.translatedSubject}
+          externalId={ticket.externalId}
+          detectedLanguage={ticket.detectedLanguage}
+          status={ticket.status}
+        />
       </div>
 
       <div className="flex flex-1 overflow-hidden">
@@ -125,7 +131,7 @@ export default async function TicketDetailPage({ params }: PageProps) {
               <TicketComments
                 ticketId={ticket.id}
                 comments={serializedComments}
-                currentUserId={demoUser?.id ?? users[0]?.id ?? ""}
+                currentUserId={currentUserId}
               />
             </TabsContent>
           </Tabs>

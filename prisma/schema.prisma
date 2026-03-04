@@ -39,7 +39,7 @@ model Ticket {
   customerName          String?
   assigneeId            String?
   assignee              User?        @relation("AssignedTickets", fields: [assigneeId], references: [id])
-  outlookConversationId String?
+  gmailThreadId         String?
   sentryData            Json?
   posthogData           Json?
   userData              Json?
@@ -80,7 +80,7 @@ model Message {
   senderName          String?
   userId              String?
   user                User?      @relation(fields: [userId], references: [id])
-  outlookMessageId    String?
+  gmailMessageId      String?
   createdAt           DateTime   @default(now())
 }
 

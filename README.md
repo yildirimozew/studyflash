@@ -32,7 +32,17 @@ Edit `.env` and fill in:
 | `DEMO_MODE` | Set to `"true"` | Enables credential-based demo login (no OAuth needed) |
 | `NEXT_PUBLIC_DEMO_MODE` | Set to `"true"` | Exposes demo mode flag to the login page |
 
-Leave `GOOGLE_CLIENT_ID`, `MICROSOFT_GRAPH_*` blank for demo mode.
+Leave `GOOGLE_CLIENT_ID` blank for demo mode. `GMAIL_ADDRESS` / `GMAIL_REFRESH_TOKEN` are optional -- sync is disabled if absent.
+
+### Gmail OAuth setup (optional)
+
+To enable real Gmail sync, run the token helper once using the Google account that owns the support inbox:
+
+```bash
+npm run gmail:token
+```
+
+It prints an authorization URL. Open it, approve the Gmail permissions, paste the code back, and copy the `GMAIL_REFRESH_TOKEN` value it outputs into `.env`. Also set `GMAIL_ADDRESS` to that inbox's address.
 
 ### 3. Push schema to database
 
@@ -46,7 +56,7 @@ npx prisma db push
 npm run seed
 ```
 
-This parses the first 20 ticket files in `tickets/` (default), creates 3 demo users, and populates the database. Takes ~10 seconds without AI, or ~30 seconds with AI categorization/translation if `GROQ_API_KEY` is set.
+This parses the first 10 ticket files in `tickets/` (default), creates 3 demo users, and populates the database. Takes ~10 seconds without AI, or ~30 seconds with AI categorization/translation if `GROQ_API_KEY` is set.
 
 To seed only a few tickets for quick testing:
 
@@ -69,8 +79,8 @@ Open [http://localhost:3000](http://localhost:3000). In demo mode, click any use
 | Framework | Next.js 15 (App Router, Server Components) |
 | UI | Tailwind CSS + shadcn/ui |
 | Database | PostgreSQL via Supabase + Prisma ORM |
-| AI | Groq (Llama 3.3 70B Versatile) |
-| Email | Microsoft Graph API (optional, demo mode fallback) |
+| AI | Groq (Llama 3.1 8B Instant) |
+| Email | Gmail API via googleapis (optional, graceful fallback) |
 | Auth | NextAuth v5 (Google OAuth + demo credentials) |
 | Deployment | Vercel + Supabase (both free tier) |
 
@@ -85,12 +95,12 @@ app/
     settings/            Team management
   api/
     tickets/             CRUD + nested routes for messages, comments, AI, enrichment
-    sync/outlook/        Manual Outlook sync trigger
+    sync/gmail/          Manual Gmail sync trigger
     auth/[...nextauth]/  NextAuth handlers
 lib/
   services/
     ai.ts                Groq/Llama: categorize, translate, draft, assign
-    email.ts             Graph API: sync, reply, sender detection
+    email.ts             Gmail API: sync, reply, thread parity
     enrichment.ts        Mocked Sentry/PostHog/user data
   auth.ts                NextAuth config
   prisma.ts              Prisma client singleton
@@ -104,7 +114,7 @@ tickets/                 100 raw support ticket .txt files
 - **Multilingual support**: Incoming tickets (DE/FR/NL/IT) are auto-translated to English for agents. Agent replies are translated back to the customer's language before sending.
 - **AI triage**: Tickets are auto-categorized, prioritized, and assigned based on content. Confidence thresholds control auto-apply vs. suggest-only.
 - **AI draft responses**: One-click draft generation in the customer's language using conversation context.
-- **Outlook thread parity**: Replies sent from the platform use the Graph API reply endpoint to stay in the same Outlook conversation thread.
+- **Gmail thread parity**: Replies sent from the platform include `In-Reply-To` / `References` headers and the `threadId` so they appear in the same Gmail conversation thread.
 - **Data enrichment**: Sentry errors, PostHog recordings, and user profile data displayed alongside each ticket (mocked for MVP).
 
 ## Available Scripts
@@ -116,6 +126,7 @@ tickets/                 100 raw support ticket .txt files
 | `npm run seed` | Seed database from ticket files |
 | `npm run seed -- --limit=N` | Seed first N tickets (default: 20) |
 | `npm run db:reset` | Wipe all data (then re-seed) |
+| `npm run gmail:token` | One-time Gmail OAuth2 refresh token setup |
 | `npx prisma db push` | Push schema to database |
 | `npx prisma studio` | Open Prisma Studio (DB browser) |
 

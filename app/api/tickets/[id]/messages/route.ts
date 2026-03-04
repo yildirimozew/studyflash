@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { translateOutbound } from "@/lib/services/ai";
-import { sendReplyViaOutlook } from "@/lib/services/email";
+import { sendReplyViaGmail } from "@/lib/services/email";
 import { revalidatePath } from "next/cache";
 
 export async function GET(
@@ -35,6 +35,7 @@ export async function POST(
         where: { senderType: "CUSTOMER" },
         orderBy: { createdAt: "desc" },
         take: 1,
+        select: { gmailMessageId: true },
       },
     },
   });
@@ -53,10 +54,13 @@ export async function POST(
   }
 
   const lastCustomerMsg = ticket.messages[0];
-  if (lastCustomerMsg?.outlookMessageId) {
+  if (lastCustomerMsg?.gmailMessageId && ticket.customerEmail) {
     const textToSend = outboundTranslation || agentText;
-    await sendReplyViaOutlook({
-      outlookMessageId: lastCustomerMsg.outlookMessageId,
+    await sendReplyViaGmail({
+      gmailMessageId: lastCustomerMsg.gmailMessageId,
+      gmailThreadId: ticket.gmailThreadId ?? null,
+      toEmail: ticket.customerEmail,
+      subject: ticket.subject,
       replyBody: textToSend,
     });
   }
